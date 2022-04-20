@@ -134,6 +134,7 @@ function RPCPerformanceBanner({ className }: { className?: string }) {
   const MAX_TPS = 1500 // force settings
 
   useAsyncEffect(async () => {
+    if (isLowRpcPerformance) return // no need calc again
     if (!currentEndPoint?.url) return
     const result = await jFetch<{
       result: {
@@ -181,12 +182,13 @@ function VersionMessageBubble() {
     <div>
       <FadeIn>
         {versionRefreshData === 'too-old' && (
-          <Row className="w-[min(324px,100%)]  m-auto justify-center items-center py-4 px-6 mobile:py-3 mb-8 mobile:mb-2 rounded-xl ring-1.5 ring-inset ring-[#DA2EEF] bg-[#1B1659]">
+          <Row className="w-[min(400px,100%)]  m-auto justify-center items-center py-4 px-6 mobile:py-3 mb-8 mobile:mb-2 rounded-xl ring-1.5 ring-inset ring-[#D8CB39] bg-[#1B1659]">
             <div className="text-[#C4D6FF] text-sm font-medium">
-              current version is too old,{' '}
-              <span className="clickable text-[#DA2EEF] font-bold" onClick={() => refreshWindow({ noCache: true })}>
-                refresh app
-              </span>
+              New app version available,{' '}
+              <span className="clickable text-[#D8CB39] font-bold" onClick={() => refreshWindow({ noCache: true })}>
+                refresh
+              </span>{' '}
+              to update.
             </div>
           </Row>
         )}
@@ -320,7 +322,11 @@ function SideMenu({ className, onClickCloseBtn }: { className?: string; onClickC
 
   useEffect(() => {
     if (!inClient) return
-    setCssVarible(globalThis.document.documentElement, '--side-menu-width', sideMenuRef.current?.clientWidth)
+    setCssVarible(
+      globalThis.document.documentElement,
+      '--side-menu-width',
+      sideMenuRef.current ? Math.min(sideMenuRef.current.clientWidth, sideMenuRef.current.clientHeight) : 0
+    )
   }, [sideMenuRef])
 
   return (
@@ -801,9 +807,9 @@ function RpcConnectionPanelPopover({ close: closePanel }: { close: () => void })
                   } items-center w-full`}
                 >
                   {endPoint.name ?? '--'}
-                  {endPoint.url === autoChoosedEndPoint?.url && <Badge className="self-center">recommended</Badge>}
+                  {endPoint.url === autoChoosedEndPoint?.url && <Badge className="self-center ml-2">recommended</Badge>}
                   {endPoint.isUserCustomized && (
-                    <Badge className="self-center" cssColor="#c4d6ff">
+                    <Badge className="self-center ml-2" cssColor="#c4d6ff">
                       user added
                     </Badge>
                   )}

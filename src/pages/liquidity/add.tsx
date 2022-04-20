@@ -9,13 +9,18 @@ import useAppSettings from '@/application/appSettings/useAppSettings'
 import useFarms from '@/application/farms/useFarms'
 import useLiquidityAmmSelector from '@/application/liquidity/feature/useLiquidityAmmSelector'
 import useLiquidityAmountCalculator from '@/application/liquidity/feature/useLiquidityAmountCalculator'
-import useLiquidityCoin1Filler from '@/application/liquidity/feature/useLiquidityCoin1Filler'
+import useLiquidityInitCoinFiller from '@/application/liquidity/feature/useLiquidityInitCoinFiller'
 import useLiquidityUrlParser from '@/application/liquidity/feature/useLiquidityUrlParser'
 import txAddLiquidity from '@/application/liquidity/transaction/txAddLiquidity'
 import useLiquidity from '@/application/liquidity/useLiquidity'
 import { routeTo } from '@/application/routeTools'
 import useToken from '@/application/token/useToken'
-import { SOL_BASE_BALANCE, SOLDecimals } from '@/application/token/utils/quantumSOL'
+import {
+  SOL_BASE_BALANCE,
+  SOLDecimals,
+  isQuantumSOLVersionSOL,
+  isQuantumSOLVersionWSOL
+} from '@/application/token/utils/quantumSOL'
 import useWallet from '@/application/wallet/useWallet'
 import Button, { ButtonHandle } from '@/components/Button'
 import Card from '@/components/Card'
@@ -52,6 +57,8 @@ import { Checkbox } from '../../components/Checkbox'
 import { RemoveLiquidityDialog } from '../../components/dialogs/RemoveLiquidityDialog'
 import TokenSelectorDialog from '../../components/dialogs/TokenSelectorDialog'
 import { Badge } from '@/components/Badge'
+import { isMintEqual } from '@/functions/judgers/areEqual'
+import { SplToken } from '@/application/token/type'
 
 const { ContextProvider: LiquidityUIContextProvider, useStore: useLiquidityContextStore } = createContextStore({
   hasAcceptedPriceChange: false,
@@ -76,7 +83,7 @@ export default function Liquidity() {
 
 function LiquidityEffect() {
   useLiquidityUrlParser()
-  useLiquidityCoin1Filler()
+  useLiquidityInitCoinFiller()
   useLiquidityAmmSelector()
   //  auto fresh  liquidity's coin1Amount and coin2Amount
   useLiquidityAmountCalculator()
@@ -198,7 +205,7 @@ function LiquidityConfirmRiskPanel({
 }
 
 function LiquidityCard() {
-  const { connected } = useWallet()
+  const { connected, owner } = useWallet()
   const [isCoinSelectorOn, { on: turnOnCoinSelector, off: turnOffCoinSelector }] = useToggle()
   // it is for coin selector panel
   const [targetCoinNo, setTargetCoinNo] = useState<'1' | '2'>('1')
@@ -208,8 +215,10 @@ function LiquidityCard() {
   const {
     coin1,
     coin1Amount,
+    unslippagedCoin1Amount,
     coin2,
     coin2Amount,
+    unslippagedCoin2Amount,
     currentJsonInfo,
     currentHydratedInfo,
     isSearchAmmDialogOpen,
@@ -232,15 +241,10 @@ function LiquidityCard() {
     togglePermanentlyConfirm
   } = useLiquidityWarning()
 
-  const haveEnoughCoin1 = useMemo(
-    () => coin1 && checkWalletHasEnoughBalance(toTokenAmount(coin1, coin1Amount, { alreadyDecimaled: true })),
-    [coin1, coin1Amount, checkWalletHasEnoughBalance]
-  )
-
-  const haveEnoughCoin2 = useMemo(
-    () => coin2 && checkWalletHasEnoughBalance(toTokenAmount(coin2, coin2Amount, { alreadyDecimaled: true })),
-    [coin2, coin2Amount, checkWalletHasEnoughBalance]
-  )
+  const haveEnoughCoin1 =
+    coin1 && checkWalletHasEnoughBalance(toTokenAmount(coin1, coin1Amount, { alreadyDecimaled: true }))
+  const haveEnoughCoin2 =
+    coin2 && checkWalletHasEnoughBalance(toTokenAmount(coin2, coin2Amount, { alreadyDecimaled: true }))
 
   const cardRef = useRef<HTMLDivElement>(null)
 
@@ -268,7 +272,7 @@ function LiquidityCard() {
           className="mt-5"
           disabled={isApprovePanelShown}
           componentRef={coinInputBox1ComponentRef}
-          value={coin1Amount}
+          value={unslippagedCoin1Amount}
           haveHalfButton
           haveCoinIcon
           canSelect
@@ -323,7 +327,7 @@ function LiquidityCard() {
         <CoinInputBox
           componentRef={coinInputBox2ComponentRef}
           disabled={isApprovePanelShown}
-          value={coin2Amount}
+          value={unslippagedCoin2Amount}
           haveHalfButton
           haveCoinIcon
           canSelect
@@ -420,12 +424,14 @@ function LiquidityCard() {
         onSelectCoin={(token) => {
           if (targetCoinNo === '1') {
             useLiquidity.setState({ coin1: token })
-            if (String(token.mint) === String(coin2?.mint)) {
+            // delete other
+            if (!canTokenPairBeSelected(token, coin2)) {
               useLiquidity.setState({ coin2: undefined })
             }
           } else {
+            // delete other
             useLiquidity.setState({ coin2: token })
-            if (String(token.mint) === String(coin1?.mint)) {
+            if (!canTokenPairBeSelected(token, coin1)) {
               useLiquidity.setState({ coin1: undefined })
             }
           }
@@ -440,6 +446,10 @@ function LiquidityCard() {
       />
     </CyberpunkStyleCard>
   )
+}
+
+function canTokenPairBeSelected(targetToken: SplToken | undefined, candidateToken: SplToken | undefined) {
+  return !isMintEqual(targetToken?.mint, candidateToken?.mint)
 }
 
 function RemainSOLAlert() {
@@ -497,7 +507,7 @@ function LiquidityCardPriceIndicator({ className }: { className?: string }) {
   if (!price) return null
   return (
     <Row className={twMerge('font-medium text-sm text-[#ABC4FF]', className)}>
-      {1} {innerPriceLeftCoin?.symbol ?? '--'} ≈{' '}
+      {1} {innerPriceLeftCoin?.symbol ?? '--'} ≑{' '}
       {toString(innerReversed ? div(1, price) : price, {
         decimalLength: isMobile ? 'auto 2' : 'auto',
         zeroDecimalNotAuto: true
@@ -514,6 +524,9 @@ function LiquidityCardInfo({ className }: { className?: string }) {
   const currentHydratedInfo = useLiquidity((s) => s.currentHydratedInfo)
   const coin1 = useLiquidity((s) => s.coin1)
   const coin2 = useLiquidity((s) => s.coin2)
+  const focusSide = useLiquidity((s) => s.focusSide)
+  const coin1Amount = useLiquidity((s) => s.coin1Amount)
+  const coin2Amount = useLiquidity((s) => s.coin2Amount)
   const slippageTolerance = useAppSettings((s) => s.slippageTolerance)
 
   const isCoin1Base = String(currentHydratedInfo?.baseMint) === String(coin1?.mint)
@@ -537,21 +550,56 @@ function LiquidityCardInfo({ className }: { className?: string }) {
         className
       )}
     >
-      <Col className="gap-3 w-full">
+      <Col className="w-full">
         <LiquidityCardItem
-          fieldName={`Pooled (base)`}
+          fieldName={`Base`}
+          fieldValue={focusSide === 'coin1' ? coin1?.symbol ?? 'unknown' : coin2?.symbol ?? 'unknown'}
+        />
+        <FadeIn>
+          {(coin1Amount || coin2Amount) && (
+            <LiquidityCardItem
+              fieldName={`Max Amount`}
+              fieldValue={`${formatNumber(focusSide === 'coin1' ? coin2Amount || '' : coin1Amount ?? '', {
+                fractionLength: 'auto'
+              })} ${focusSide === 'coin1' ? coin2?.symbol ?? 'unknown' : coin1?.symbol ?? 'unknown'}`}
+            />
+          )}
+        </FadeIn>
+        {/* <LiquidityCardItem
+          fieldName={`Pool liquidity`}
           fieldValue={
-            pooledBaseTokenAmount
-              ? `${formatNumber(pooledBaseTokenAmount.toExact())} ${coinBase?.symbol ?? 'unknown'}`
-              : '--'
+            <Col className="items-end">
+              <div>
+                {pooledBaseTokenAmount
+                  ? `${formatNumber(pooledBaseTokenAmount.toExact())} ${coinBase?.symbol ?? 'unknown'}`
+                  : '--'}
+              </div>
+              <div>
+                {pooledQuoteTokenAmount
+                  ? `${formatNumber(pooledQuoteTokenAmount.toExact())} ${coinQuote?.symbol ?? 'unknown'}`
+                  : '--'}
+              </div>
+            </Col>
+          }
+        /> */}
+        <LiquidityCardItem
+          fieldName={`Pool liquidity (${coinBase?.symbol ?? 'unknown'})`}
+          fieldValue={
+            <div>
+              {pooledBaseTokenAmount
+                ? `${formatNumber(pooledBaseTokenAmount.toExact())} ${coinBase?.symbol ?? 'unknown'}`
+                : '--'}
+            </div>
           }
         />
         <LiquidityCardItem
-          fieldName={`Pooled (quote)`}
+          fieldName={`Pool liquidity (${coinQuote?.symbol ?? 'unknown'})`}
           fieldValue={
-            pooledQuoteTokenAmount
-              ? `${formatNumber(pooledQuoteTokenAmount.toExact())} ${coinQuote?.symbol ?? 'unknown'}`
-              : '--'
+            <div>
+              {pooledQuoteTokenAmount
+                ? `${formatNumber(pooledQuoteTokenAmount.toExact())} ${coinQuote?.symbol ?? 'unknown'}`
+                : '--'}
+            </div>
           }
         />
         <LiquidityCardItem
@@ -571,7 +619,7 @@ function LiquidityCardInfo({ className }: { className?: string }) {
         />
         <Collapse openDirection="upwards" className="w-full">
           <Collapse.Body>
-            <Col className="gap-3 pb-3">
+            <Col className="pb-3">
               <LiquidityCardItem fieldName="Addresses" tooltipContent={<LiquidityCardTooltipPanelAddress />} />
               <LiquidityCardItem
                 fieldName="Slippage Tolerance"
@@ -621,7 +669,7 @@ function LiquidityCardItem({
   debugForceOpen?: boolean
 }) {
   return (
-    <Row className={twMerge('w-full justify-between', className)}>
+    <Row className={twMerge('w-full justify-between my-1.5', className)}>
       <Row className="items-center text-xs font-medium text-[#ABC4FF]">
         <div className="mr-1">{fieldName}</div>
         {tooltipContent && (

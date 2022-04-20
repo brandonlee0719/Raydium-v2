@@ -1,6 +1,6 @@
 import { Signer, Transaction, TransactionInstruction } from '@solana/web3.js'
 
-import { handleRecentBlockhash } from './handleRecentBlockhash'
+import { attachRecentBlockhash } from './attachRecentBlockhash'
 
 export const loadTransaction = async (payload: { transaction: Transaction; signers?: Signer[] }) => {
   const { transaction, signers } = payload
@@ -36,7 +36,7 @@ export const createTransactionCollector = (defaultRawTransaction?: Transaction):
     addSigner(...signers: Signer[]) {
       innerSigners.push(...signers)
     },
-    async spawnTransaction() {
+    async spawnTransaction(): Promise<Transaction> {
       const rawTransaction = innerTransaction || (defaultRawTransaction ?? new Transaction())
       if (frontInstructions.length || endInstructions.length) {
         rawTransaction.add(...frontInstructions, ...endInstructions.reverse())
@@ -50,7 +50,7 @@ export const createTransactionCollector = (defaultRawTransaction?: Transaction):
 
 const partialSignTransacion = async (transaction: Transaction, signers?: Signer[]): Promise<Transaction> => {
   if (signers?.length) {
-    await handleRecentBlockhash(transaction)
+    await attachRecentBlockhash(transaction)
     transaction.partialSign(...signers)
     return transaction
   }

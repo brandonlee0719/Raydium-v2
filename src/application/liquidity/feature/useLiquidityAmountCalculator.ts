@@ -17,6 +17,7 @@ import { SDKParsedLiquidityInfo } from '../type'
 import useLiquidity from '../useLiquidity'
 import sdkParseJsonLiquidityInfo from '../utils/sdkParseJsonLiquidityInfo'
 import { useEffect } from 'react'
+import toPubString from '@/functions/format/toMintString'
 
 /**
  * will auto fresh  liquidity's coin1Amount and coin2Amount with liquidity's jsonInfos and coin1 and coin2
@@ -26,8 +27,8 @@ import { useEffect } from 'react'
 export default function useLiquidityAmountCalculator() {
   const connection = useConnection((s) => s.connection)
 
-  const jsonInfos = useLiquidity((s) => s.jsonInfos)
   const currentJsonInfo = useLiquidity((s) => s.currentJsonInfo)
+  const currentSdkParsedInfo = useLiquidity((s) => s.currentSdkParsedInfo)
 
   const coin1 = useLiquidity((s) => s.coin1)
   const coin2 = useLiquidity((s) => s.coin2)
@@ -43,31 +44,35 @@ export default function useLiquidityAmountCalculator() {
   }, [refreshCount])
 
   useAsyncEffect(async () => {
-    if (!coin1 || !coin2 || !currentJsonInfo || !connection || !jsonInfos) return
+    if (!coin1 || !coin2 || !currentSdkParsedInfo || !currentJsonInfo /* acctually no need, but for ts type gard */)
+      return
     if (
-      !hasSameItems([currentJsonInfo.baseMint, currentJsonInfo.quoteMint], [String(coin1.mint), String(coin2.mint)]) ||
+      !hasSameItems(
+        [toPubString(currentSdkParsedInfo.baseMint), toPubString(currentSdkParsedInfo.quoteMint)],
+        [String(coin1.mint), String(coin2.mint)]
+      ) ||
       (focusSide === 'coin1' && eq(userCoin1Amount, 0)) ||
       (focusSide === 'coin2' && eq(userCoin2Amount, 0))
     ) {
-      if (focusSide === 'coin1') useLiquidity.setState({ coin2Amount: '' })
-      if (focusSide === 'coin2') useLiquidity.setState({ coin1Amount: '' })
+      if (focusSide === 'coin1') useLiquidity.setState({ coin2Amount: '', unslippagedCoin2Amount: '' })
+      if (focusSide === 'coin2') useLiquidity.setState({ coin1Amount: '', unslippagedCoin1Amount: '' })
       return
     }
     try {
-      const pairCoinAmount = await calculatePairTokenAmount({
+      const { amount: pairCoinAmount, unslippagedAmount: unslippagedPairCoinAmount } = await calculatePairTokenAmount({
         coin1,
         userCoin1Amount,
         coin2,
         userCoin2Amount,
         focusSide,
-        connection,
         currentJsonInfo,
+        currentSdkParsedInfo,
         slippageTolerance
       })
       if (focusSide === 'coin1') {
-        useLiquidity.setState({ coin2Amount: pairCoinAmount })
+        useLiquidity.setState({ coin2Amount: pairCoinAmount, unslippagedCoin2Amount: unslippagedPairCoinAmount })
       } else {
-        useLiquidity.setState({ coin1Amount: pairCoinAmount })
+        useLiquidity.setState({ coin1Amount: pairCoinAmount, unslippagedCoin1Amount: unslippagedPairCoinAmount })
       }
     } catch (err) {
       console.error('err: ', err)
@@ -79,8 +84,9 @@ export default function useLiquidityAmountCalculator() {
     userCoin2Amount,
     focusSide,
     connection,
-    jsonInfos,
-    currentJsonInfo,
+    // jsonInfos, no need , because sdkParsed changed jsonInfo must change before
+    //currentJsonInfo, no need , because sdkParsed changed jsonInfo must change before
+    currentSdkParsedInfo,
     slippageTolerance,
     refreshCount
   ])
@@ -99,9 +105,9 @@ async function calculatePairTokenAmount({
   userCoin2Amount,
   focusSide,
 
-  connection,
   slippageTolerance,
-  currentJsonInfo: jsonInfo
+  currentJsonInfo: jsonInfo,
+  currentSdkParsedInfo: sdkParsedInfo
 }: {
   coin1: SplToken
   userCoin1Amount?: Numberish
@@ -109,25 +115,19 @@ async function calculatePairTokenAmount({
   userCoin2Amount?: Numberish
   focusSide: 'coin1' | 'coin2'
 
-  connection: Connection
   slippageTolerance: Numberish
   currentJsonInfo: LiquidityPoolJsonInfo
-}): Promise<string> {
-  const sdkParsedInfo = sdkParsedInfoCache.has(jsonInfo.id)
-    ? sdkParsedInfoCache.get(jsonInfo.id)!
-    : await (async () => {
-        const result = await sdkParseJsonLiquidityInfo([jsonInfo], connection) // FIXME - too loud
-        const sdkParsed: SDKParsedLiquidityInfo | undefined = result[0]
-        sdkParsedInfoCache.set(jsonInfo.id, sdkParsed)
-        return sdkParsed
-      })()
-
+  currentSdkParsedInfo: SDKParsedLiquidityInfo
+}): Promise<{
+  amount: string
+  unslippagedAmount: string
+}> {
   const inputToken = focusSide === 'coin1' ? coin1 : coin2
   const pairToken = inputToken === coin1 ? coin2 : coin1
   const inputAmount = toTokenAmount(inputToken, focusSide === 'coin1' ? userCoin1Amount : userCoin2Amount, {
     alreadyDecimaled: true
   })
-  const { maxAnotherAmount } = Liquidity.computeAnotherAmount({
+  const { maxAnotherAmount, anotherAmount } = Liquidity.computeAnotherAmount({
     poolKeys: jsonInfo2PoolKeys(jsonInfo),
     poolInfo: sdkParsedInfo,
     amount: deUITokenAmount(inputAmount),
@@ -135,5 +135,8 @@ async function calculatePairTokenAmount({
     slippage: toPercent(toPercent(slippageTolerance))
   })
 
-  return shakeZero(toUITokenAmount(maxAnotherAmount).toExact())
+  return {
+    amount: shakeZero(toUITokenAmount(maxAnotherAmount).toExact()),
+    unslippagedAmount: shakeZero(toUITokenAmount(anotherAmount).toExact())
+  }
 }

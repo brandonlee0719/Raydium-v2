@@ -11,11 +11,17 @@ import { getCoingeckoChartPriceData } from '@/application/swap/klinePrice'
 import txSwap from '@/application/swap/txSwap'
 import { useSwap } from '@/application/swap/useSwap'
 import { useSwapAmountCalculator } from '@/application/swap/useSwapAmountCalculator'
-import useSwapCoin1Filler from '@/application/swap/useSwapCoin1Filler'
+import useSwapInitCoinFiller from '@/application/swap/useSwapInitCoinFiller'
 import useSwapUrlParser from '@/application/swap/useSwapUrlParser'
 import { SplToken } from '@/application/token/type'
 import useToken, { RAYDIUM_MAINNET_TOKEN_LIST_NAME } from '@/application/token/useToken'
-import { SOL_BASE_BALANCE, SOLDecimals, WSOLMint } from '@/application/token/utils/quantumSOL'
+import {
+  SOL_BASE_BALANCE,
+  SOLDecimals,
+  WSOLMint,
+  isQuantumSOLVersionSOL,
+  isQuantumSOLVersionWSOL
+} from '@/application/token/utils/quantumSOL'
 import { USDCMint, USDTMint } from '@/application/token/utils/wellknownToken.config'
 import useWallet from '@/application/wallet/useWallet'
 import Button, { ButtonHandle } from '@/components/Button'
@@ -54,10 +60,12 @@ import { HexAddress, Numberish } from '@/types/constants'
 
 import { useSwapTwoElements } from '../hooks/useSwapTwoElements'
 import { Badge } from '@/components/Badge'
-import txUnwrapWSOL from '@/application/swap/txUnwrapWSOL'
+import txUnwrapAllWSOL, { txUnwrapWSOL } from '@/application/swap/txUnwrapWSOL'
+import { isMintEqual } from '@/functions/judgers/areEqual'
+import txWrapSOL from '@/application/swap/txWrapSOL'
 
 function SwapEffect() {
-  useSwapCoin1Filler()
+  useSwapInitCoinFiller()
   useSwapUrlParser()
   // useKlineDataFetcher() // temporary use coingecko price data
   useSwapAmountCalculator()
@@ -71,73 +79,13 @@ const { ContextProvider: SwapUIContextProvider, useStore: useSwapContextStore } 
 })
 
 export default function Swap() {
-  const { log, popConfirm } = useNotification()
-
-  // useEffect(() => {
-  //   // just for test
-  //   setTimeout(() => {
-  //     log?.({
-  //       type: 'success',
-  //       title: 'Transaction success',
-  //       description: <div>View details on: </div>
-  //     })
-  //   }, 120)
-  //   setTimeout(() => {
-  //     log?.({
-  //       type: 'error',
-  //       title: 'Transaction error',
-  //       description: <div>View details on: </div>
-  //     })
-  //   }, 500)
-  //   setTimeout(() => {
-  //     log?.({
-  //       type: 'warning',
-  //       title: 'Transaction warning',
-  //       description: <div>View details on: </div>
-  //     })
-  //   }, 1000)
-  //   setTimeout(() => {
-  //     log?.({
-  //       type: 'info',
-  //       title: 'Transaction info',
-  //       description: <div>View details on: </div>
-  //     })
-  //   }, 1500)
-  //   setTimeout(() => {
-  //     popConfirm?.({
-  //       type: 'error',
-  //       title: 'Price Impact Warning',
-  //       description: 'The swap you are about to make has a price impact higher than 5%. Try a smaller trade!',
-  //       onCancel() {
-  //         // eslint-disable-next-line no-console
-  //         console.log('cancel')
-  //       },
-  //       onConfirm() {
-  //         // eslint-disable-next-line no-console
-  //         console.log('confirm')
-  //       }
-  //     })
-  //   }, 1800)
-  // }, [log])
-
-  // return useMemo(
-  //   // to avoid unnecessary rerender
-  //   () => (
-  //     <PageLayout metaTitle="Swap">
-  //       <SwapHead />
-  //       <SwapCard />
-  //       <KLineChart />
-  //     </PageLayout>
-  //   ),
-  //   []
-  // )
   return (
     <SwapUIContextProvider>
       <SwapEffect />
       <PageLayout mobileBarTitle="Swap" metaTitle="Swap - Raydium">
         <SwapHead />
         <SwapCard />
-        <UnwrapWSOL />
+        {/* <UnwrapWSOL /> */}
         <KLineChart />
       </PageLayout>
     </SwapUIContextProvider>
@@ -406,71 +354,110 @@ function SwapCard() {
       <FadeInStable show={hasSwapDetermined}>
         <SwapCardInfo className="mt-5" />
       </FadeInStable>
-
       {/* alert user if price has accidently change  */}
       <SwapPriceAcceptChip />
-      <Button
-        className="w-full frosted-glass-teal mt-5"
-        componentRef={swapButtonComponentRef}
-        validators={[
-          {
-            should: walletConnected,
-            forceActive: true,
-            fallbackProps: {
-              onClick: () => useAppSettings.setState({ isWalletSelectorShown: true }),
-              children: 'Connect Wallet'
-            }
-          },
-          {
-            should: upCoin && downCoin,
-            fallbackProps: { children: 'Select a token' }
-          },
-          {
-            should: hasConfirmed,
-            forceActive: true,
-            fallbackProps: {
-              onClick: popunOfficialConfirm,
-              children: 'Confirm unOfficial warning' // user may never see this
-            }
-          },
-          {
-            should: swapable !== false,
-            fallbackProps: { children: 'Pool Not Ready' }
-          },
-          {
-            should: routes,
-            fallbackProps: { children: 'Finding Pool ...' }
-          },
-          {
-            should: swapable === true || routes?.length === 0,
-            fallbackProps: { children: 'Pool Not Found' }
-          },
-          {
-            should:
-              upCoinAmount && isMeaningfulNumber(upCoinAmount) && downCoinAmount && isMeaningfulNumber(downCoinAmount),
-            fallbackProps: { children: 'Enter an amount' }
-          },
 
-          {
-            should: haveEnoughUpCoin,
-            fallbackProps: { children: `Insufficient ${upCoin?.symbol ?? ''} balance` }
-          },
-          {
-            should: priceImpact && lte(priceImpact, 0.05),
-            forceActive: true,
-            fallbackProps: {
-              onClick: () => popPriceConfirm({ priceImpact })
+      {/* swap sol and wsol */}
+      {isSolToWsol(upCoin, downCoin) || isWsolToSol(upCoin, downCoin) ? (
+        <Button
+          className="w-full frosted-glass-teal mt-5"
+          componentRef={swapButtonComponentRef}
+          validators={[
+            {
+              should: walletConnected,
+              forceActive: true,
+              fallbackProps: {
+                onClick: () => useAppSettings.setState({ isWalletSelectorShown: true }),
+                children: 'Connect Wallet'
+              }
+            },
+            {
+              should:
+                upCoinAmount &&
+                isMeaningfulNumber(upCoinAmount) &&
+                downCoinAmount &&
+                isMeaningfulNumber(downCoinAmount),
+              fallbackProps: { children: 'Enter an amount' }
+            },
+            {
+              should: haveEnoughUpCoin,
+              fallbackProps: { children: `Insufficient ${upCoin?.symbol ?? ''} balance` }
             }
-          },
-          {
-            should: hasAcceptedPriceChange,
-            fallbackProps: { children: `Accept price change` }
+          ]}
+          onClick={() =>
+            isWsolToSol(upCoin, downCoin)
+              ? txUnwrapWSOL({ amount: downCoinAmount })
+              : txWrapSOL({ amount: downCoinAmount })
           }
-        ]}
-        onClick={txSwap}
-      >
-        Swap
-      </Button>
+        >
+          {isWsolToSol(upCoin, downCoin) ? 'Unwrap' : 'Wrap'}
+        </Button>
+      ) : (
+        <Button
+          className="w-full frosted-glass-teal mt-5"
+          componentRef={swapButtonComponentRef}
+          validators={[
+            {
+              should: walletConnected,
+              forceActive: true,
+              fallbackProps: {
+                onClick: () => useAppSettings.setState({ isWalletSelectorShown: true }),
+                children: 'Connect Wallet'
+              }
+            },
+            {
+              should: upCoin && downCoin,
+              fallbackProps: { children: 'Select a token' }
+            },
+            {
+              should: hasConfirmed,
+              forceActive: true,
+              fallbackProps: {
+                onClick: popunOfficialConfirm,
+                children: 'Confirm unOfficial warning' // user may never see this
+              }
+            },
+            {
+              should: swapable !== false,
+              fallbackProps: { children: 'Pool Not Ready' }
+            },
+            {
+              should: routes,
+              fallbackProps: { children: 'Finding Pool ...' }
+            },
+            {
+              should: swapable === true || routes?.length === 0,
+              fallbackProps: { children: 'Pool Not Found' }
+            },
+            {
+              should:
+                upCoinAmount &&
+                isMeaningfulNumber(upCoinAmount) &&
+                downCoinAmount &&
+                isMeaningfulNumber(downCoinAmount),
+              fallbackProps: { children: 'Enter an amount' }
+            },
+            {
+              should: haveEnoughUpCoin,
+              fallbackProps: { children: `Insufficient ${upCoin?.symbol ?? ''} balance` }
+            },
+            {
+              should: priceImpact && lte(priceImpact, 0.05),
+              forceActive: true,
+              fallbackProps: {
+                onClick: () => popPriceConfirm({ priceImpact })
+              }
+            },
+            {
+              should: hasAcceptedPriceChange,
+              fallbackProps: { children: `Accept price change` }
+            }
+          ]}
+          onClick={txSwap}
+        >
+          Swap
+        </Button>
+      )}
       {/* alert user if sol is not much */}
       <RemainSOLAlert />
       {/** coin selector panel */}
@@ -480,12 +467,12 @@ function SwapCard() {
         onSelectCoin={(token) => {
           if (targetCoinNo === '1') {
             useSwap.setState({ coin1: token })
-            if (String(token.mint) === String(coin2?.mint)) {
+            if (!areTokenPairSwapable(token, coin2)) {
               useSwap.setState({ coin2: undefined })
             }
           } else {
             useSwap.setState({ coin2: token })
-            if (String(token.mint) === String(coin1?.mint)) {
+            if (!areTokenPairSwapable(token, coin1)) {
               useSwap.setState({ coin1: undefined })
             }
           }
@@ -517,6 +504,22 @@ function SwapCard() {
       onConfirm: txSwap
     })
   }
+}
+
+function isSolToWsol(targetToken: SplToken | undefined, candidateToken: SplToken | undefined): boolean {
+  return isQuantumSOLVersionSOL(targetToken) && isQuantumSOLVersionWSOL(candidateToken)
+}
+
+function isWsolToSol(targetToken: SplToken | undefined, candidateToken: SplToken | undefined): boolean {
+  return isQuantumSOLVersionWSOL(targetToken) && isQuantumSOLVersionSOL(candidateToken)
+}
+
+function areTokenPairSwapable(targetToken: SplToken | undefined, candidateToken: SplToken | undefined): boolean {
+  return (
+    isSolToWsol(targetToken, candidateToken) ||
+    isWsolToSol(targetToken, candidateToken) ||
+    !isMintEqual(targetToken?.mint, candidateToken?.mint)
+  )
 }
 
 function SwapPriceAcceptChip() {
@@ -674,15 +677,15 @@ function SwapCardPriceIndicator({ className }: { className?: string }) {
         )}
       </FadeIn>
       <FadeIn>
-        {priceImpact && (
+        {priceImpact ? (
           <div
-            className={`font-medium text-xs ${
+            className={`font-medium text-xs whitespace-nowrap ${
               isDangerousPrice ? 'text-[#DA2EEF]' : isWarningPrice ? 'text-[#D8CB39]' : 'text-[#39D0D8]'
             } transition-colors`}
           >
             {isDangerousPrice || isWarningPrice ? 'Price Impact Warning' : 'Low Price Impact'}
           </div>
-        )}
+        ) : null}
       </FadeIn>
     </Col>
   )
@@ -973,7 +976,6 @@ function KLineChart() {
     },
     [availableLength]
   )
-
   return (
     <Card
       className={`flex ${
@@ -989,7 +991,9 @@ function KLineChart() {
         <KLineChartItem coin={coin1} onDataChange={(isReady) => setIsLine1BoxReady(isReady)} />
       </div>
       <div ref={kline2Box}>
-        <KLineChartItem coin={coin2} onDataChange={(isReady) => setIsLine2BoxReady(isReady)} />
+        {toPubString(coin2?.mint) !== toPubString(coin1?.mint) && (
+          <KLineChartItem coin={coin2} onDataChange={(isReady) => setIsLine2BoxReady(isReady)} />
+        )}
       </div>
     </Card>
   )
@@ -1099,7 +1103,6 @@ function KLineChartItemThumbnail({
   }
 
   return (
-    /*  */
     <svg className={className} viewBox={`0 0 2000 1000`} preserveAspectRatio="none">
       <defs>
         <filter id={`k-line-glow-${isPositive ? 'positive' : isNegative ? 'negative' : 'normal'}`}>
@@ -1144,44 +1147,44 @@ function KLineChartItemThumbnail({
   )
 }
 
-function UnwrapWSOL() {
-  const allTokenAccounts = useWallet((s) => s.allTokenAccounts)
-  const wsolTokenAccounts = allTokenAccounts.filter(
-    (tokenAccount) => toPubString(tokenAccount.mint) === toPubString(WSOLMint)
-  )
-  return (
-    <div className="self-center">
-      <FadeIn>
-        {wsolTokenAccounts.length > 0 && (
-          <div className="mt-12 max-w-[456px]">
-            <Card
-              className="p-6 mt-6 mobile:py-5 mobile:px-3"
-              size="lg"
-              style={{
-                background:
-                  'linear-gradient(140.14deg, rgba(0, 182, 191, 0.15) 0%, rgba(27, 22, 89, 0.1) 86.61%), linear-gradient(321.82deg, #18134D 0%, #1B1659 100%)'
-              }}
-            >
-              <Row className="gap-4 items-center">
-                <Col className="gap-1">
-                  <div className="text-xs mobile:text-2xs font-medium text-[rgba(171,196,255,0.5)]">
-                    Click the button if you want to unwrap WSOL to get SOL
-                  </div>
-                </Col>
+// function UnwrapWSOL() {
+//   const allTokenAccounts = useWallet((s) => s.allTokenAccounts)
+//   const wsolTokenAccounts = allTokenAccounts.filter(
+//     (tokenAccount) => toPubString(tokenAccount.mint) === toPubString(WSOLMint)
+//   )
+//   return (
+//     <div className="self-center">
+//       <FadeIn>
+//         {wsolTokenAccounts.length > 0 && (
+//           <div className="mt-12 max-w-[456px]">
+//             <Card
+//               className="p-6 mt-6 mobile:py-5 mobile:px-3"
+//               size="lg"
+//               style={{
+//                 background:
+//                   'linear-gradient(140.14deg, rgba(0, 182, 191, 0.15) 0%, rgba(27, 22, 89, 0.1) 86.61%), linear-gradient(321.82deg, #18134D 0%, #1B1659 100%)'
+//               }}
+//             >
+//               <Row className="gap-4 items-center">
+//                 <Col className="gap-1">
+//                   <div className="text-xs mobile:text-2xs font-medium text-[rgba(171,196,255,0.5)]">
+//                     Click the button if you want to unwrap all WSOL
+//                   </div>
+//                 </Col>
 
-                <Button
-                  className="flex items-center frosted-glass-teal opacity-80"
-                  onClick={() => {
-                    txUnwrapWSOL()
-                  }}
-                >
-                  Unwrap WSOL
-                </Button>
-              </Row>
-            </Card>
-          </div>
-        )}
-      </FadeIn>
-    </div>
-  )
-}
+//                 <Button
+//                   className="flex items-center frosted-glass-teal opacity-80"
+//                   onClick={() => {
+//                     txUnwrapAllWSOL()
+//                   }}
+//                 >
+//                   Unwrap WSOL
+//                 </Button>
+//               </Row>
+//             </Card>
+//           </div>
+//         )}
+//       </FadeIn>
+//     </div>
+//   )
+// }
